@@ -39,7 +39,7 @@ impl<const LENGTH: usize> AdcInterpolator<LENGTH> {
     /// Use [`pair`](pair) to create the pairs in `table`:
     ///
     /// ```
-    /// use interpolating_table::{AdcInterpolator, pair};
+    /// use adc_interpolator::{AdcInterpolator, pair};
     ///
     /// AdcInterpolator::new([
     ///   pair(1000, 12, 100, 40),
