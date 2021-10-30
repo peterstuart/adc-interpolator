@@ -70,13 +70,39 @@ impl<const LENGTH: usize> AdcInterpolator<LENGTH> {
 
         Some(interpolate(*x0, *x1, *y0, *y1, adc_value))
     }
+
+    /// Returns the smallest value that can be returned by
+    /// [`value`](AdcInterpolator::value).
+    pub fn min_value(&self) -> u32 {
+        self.first_value().min(self.last_value())
+    }
+
+    /// Returns the largest value that can be returned by
+    /// [`value`](AdcInterpolator::value).
+    pub fn max_value(&self) -> u32 {
+        self.first_value().max(self.last_value())
+    }
+
+    fn first_value(&self) -> u32 {
+        self.table.first().unwrap().1
+    }
+
+    fn last_value(&self) -> u32 {
+        self.table.last().unwrap().1
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const TABLE: AdcInterpolator<3> = AdcInterpolator::new([
+    const TABLE_POSITIVE: AdcInterpolator<3> = AdcInterpolator::new([
+        pair(1000, 12, 100, 10),
+        pair(1000, 12, 200, 30),
+        pair(1000, 12, 300, 40),
+    ]);
+
+    const TABLE_NEGATIVE: AdcInterpolator<3> = AdcInterpolator::new([
         pair(1000, 12, 100, 40),
         pair(1000, 12, 200, 30),
         pair(1000, 12, 300, 10),
@@ -84,23 +110,35 @@ mod tests {
 
     #[test]
     fn matching_exact_values() {
-        assert_eq!(TABLE.value(409), Some(40));
-        assert_eq!(TABLE.value(819), Some(30));
-        assert_eq!(TABLE.value(1228), Some(10));
+        assert_eq!(TABLE_NEGATIVE.value(409), Some(40));
+        assert_eq!(TABLE_NEGATIVE.value(819), Some(30));
+        assert_eq!(TABLE_NEGATIVE.value(1228), Some(10));
     }
 
     #[test]
     fn interpolates() {
-        assert_eq!(TABLE.value(502), Some(38));
-        assert_eq!(TABLE.value(614), Some(35));
-        assert_eq!(TABLE.value(1023), Some(21));
+        assert_eq!(TABLE_NEGATIVE.value(502), Some(38));
+        assert_eq!(TABLE_NEGATIVE.value(614), Some(35));
+        assert_eq!(TABLE_NEGATIVE.value(1023), Some(21));
     }
 
     #[test]
     fn outside_range() {
-        assert_eq!(TABLE.value(0), None);
-        assert_eq!(TABLE.value(408), None);
-        assert_eq!(TABLE.value(1229), None);
-        assert_eq!(TABLE.value(10000), None);
+        assert_eq!(TABLE_NEGATIVE.value(0), None);
+        assert_eq!(TABLE_NEGATIVE.value(408), None);
+        assert_eq!(TABLE_NEGATIVE.value(1229), None);
+        assert_eq!(TABLE_NEGATIVE.value(10000), None);
+    }
+
+    #[test]
+    fn min_value() {
+        assert_eq!(TABLE_POSITIVE.min_value(), 10);
+        assert_eq!(TABLE_NEGATIVE.min_value(), 10);
+    }
+
+    #[test]
+    fn max_value() {
+        assert_eq!(TABLE_POSITIVE.max_value(), 40);
+        assert_eq!(TABLE_NEGATIVE.max_value(), 40);
     }
 }
