@@ -14,6 +14,19 @@ use interpolate::interpolate;
 /// - `precision`: The precision of the ADC in bits (eg. for 10-bit precision, use `10`)
 /// - `voltage`: The voltage to convert (mV)
 /// - `value`: The value to use in the pair
+///
+/// # Examples
+///
+/// ```
+/// use adc_interpolator::pair;
+///
+/// pair(
+///     3300, // 3.3 V max voltage
+///     10,   // 10 bits of precision
+///     420,  // 0.42 V
+///     80,   // value
+/// );
+/// ```
 pub const fn pair(max_voltage: u32, precision: u32, voltage: u32, value: u32) -> (u32, u32) {
     let max_adc_value = 2u32.pow(precision);
     let adc_value = voltage * max_adc_value / max_voltage;
