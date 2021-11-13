@@ -46,6 +46,8 @@ pub struct AdcInterpolator<Pin, Word, const LENGTH: usize> {
     table: [(Word, u32); LENGTH],
 }
 
+type Error<Adc, ADC, Word, Pin> = nb::Error<<Adc as OneShot<ADC, Word, Pin>>::Error>;
+
 impl<Pin, Word, const LENGTH: usize> AdcInterpolator<Pin, Word, LENGTH> {
     /// Returns an interpolator using the provided table.
     ///
@@ -127,7 +129,7 @@ impl<Pin, Word, const LENGTH: usize> AdcInterpolator<Pin, Word, LENGTH> {
     pub fn read<Adc, ADC>(
         &mut self,
         adc: &mut Adc,
-    ) -> Result<Option<u32>, nb::Error<<Adc as OneShot<ADC, Word, Pin>>::Error>>
+    ) -> Result<Option<u32>, Error<Adc, ADC, Word, Pin>>
     where
         Word: Copy + Into<u32> + PartialEq + PartialOrd,
         Pin: Channel<ADC>,
