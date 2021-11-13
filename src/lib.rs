@@ -41,19 +41,18 @@ where
 }
 
 #[derive(Debug)]
-pub struct AdcInterpolator<Adc, Pin, Word, const LENGTH: usize> {
-    adc: Adc,
+pub struct AdcInterpolator<Pin, Word, const LENGTH: usize> {
     pin: Pin,
     table: [(Word, u32); LENGTH],
 }
 
-impl<Adc, Pin, Word, const LENGTH: usize> AdcInterpolator<Adc, Pin, Word, LENGTH> {
+impl<Pin, Word, const LENGTH: usize> AdcInterpolator<Pin, Word, LENGTH> {
     /// Returns an interpolator using the provided table.
     ///
-    /// The values in the table *must* be in ascending order by
-    /// voltage. (ie. If you are using [`pair`](pair) to create the
-    /// pairs in the table, the `voltage` parameter must increase with
-    /// each pair.)
+    /// The values in the table must be in ascending order by voltage
+    /// or this function will panic. (ie. If you are using
+    /// [`pair`](pair) to create the pairs in the table, the `voltage`
+    /// parameter must increase with each pair.)
     ///
     /// # Examples
     ///
@@ -67,40 +66,38 @@ impl<Adc, Pin, Word, const LENGTH: usize> AdcInterpolator<Adc, Pin, Word, LENGTH
     /// #     MockError,
     /// # };
     /// #
-    /// # let expectations: [Transaction<u16>; 1] = [Transaction::read(0, 614)];
-    /// # let adc = Mock::new(&expectations);
     /// # let pin = MockChan0 {};
     ///
     /// let interpolator = AdcInterpolator::new(
-    ///     adc,
     ///     pin,
     ///     [
-    ///         pair(1000, 12, 100, 40),
+    ///         pair::<u16>(1000, 12, 100, 40),
     ///         pair(1000, 12, 200, 30),
     ///         pair(1000, 12, 300, 10),
     ///     ],
     /// );
-    pub fn new<ADC>(adc: Adc, pin: Pin, table: [(Word, u32); LENGTH]) -> Self
+    pub fn new<ADC>(pin: Pin, table: [(Word, u32); LENGTH]) -> Self
     where
         Word: PartialOrd,
         Pin: Channel<ADC>,
-        Adc: OneShot<ADC, Word, Pin>,
     {
         debug_assert!(
             table.windows(2).all(|w| w[0].0 <= w[1].0),
             "The values in table must be in ascending order by voltage"
         );
 
-        Self { adc, pin, table }
+        Self { pin, table }
     }
 
-    pub fn free(self) -> (Adc, Pin) {
-        (self.adc, self.pin)
+    /// Destroys the interpolator and returns the `Pin`.
+    pub fn free(self) -> Pin {
+        self.pin
     }
 
     /// Returns a value based on the table, using linear interpolation
     /// between values in the table if necessary. If `adc_value` falls
-    /// outside the range of the table, returns `None`.
+    /// outside the range of the table, returns `Ok(None)`.
+    ///
     /// # Examples
     ///
     /// ```
@@ -112,11 +109,10 @@ impl<Adc, Pin, Word, const LENGTH: usize> AdcInterpolator<Adc, Pin, Word, LENGTH
     /// # };
     /// #
     /// # let expectations: [Transaction<u16>; 1] = [Transaction::read(0, 614)];
-    /// # let adc = Mock::new(&expectations);
+    /// # let mut adc = Mock::new(&expectations);
     /// # let pin = MockChan0 {};
     ///
     /// let mut interpolator = AdcInterpolator::new(
-    ///     adc,
     ///     pin,
     ///     [
     ///         pair(1000, 12, 100, 40),
@@ -126,17 +122,18 @@ impl<Adc, Pin, Word, const LENGTH: usize> AdcInterpolator<Adc, Pin, Word, LENGTH
     /// );
     ///
     /// // With voltage at 0.15V, the value is 35
-    /// assert_eq!(interpolator.read(), Ok(Some(35)));
+    /// assert_eq!(interpolator.read(&mut adc), Ok(Some(35)));
     /// ```
-    pub fn read<ADC>(
+    pub fn read<Adc, ADC>(
         &mut self,
+        adc: &mut Adc,
     ) -> Result<Option<u32>, nb::Error<<Adc as OneShot<ADC, Word, Pin>>::Error>>
     where
         Word: Copy + Into<u32> + PartialEq + PartialOrd,
         Pin: Channel<ADC>,
         Adc: OneShot<ADC, Word, Pin>,
     {
-        let adc_value = self.adc.read(&mut self.pin)?;
+        let adc_value = adc.read(&mut self.pin)?;
 
         let result = self.table.iter().enumerate().find_map(|(index, (x0, y0))| {
             let (x1, y1) = self.table.get(index + 1)?;
@@ -208,14 +205,15 @@ mod tests {
         ]
     }
 
-    pub fn interpolator<const LENGTH: usize>(
+    fn interpolator<const LENGTH: usize>(
         table: [(u16, u32); LENGTH],
-        expectations: &[Transaction<u16>],
-    ) -> AdcInterpolator<Generic<Transaction<u16>>, MockChan0, u16, LENGTH> {
-        let adc = Mock::new(expectations);
+    ) -> AdcInterpolator<MockChan0, u16, LENGTH> {
         let pin = MockChan0 {};
+        AdcInterpolator::new(pin, table)
+    }
 
-        AdcInterpolator::new(adc, pin, table)
+    fn adc(expectations: &[Transaction<u16>]) -> Generic<Transaction<u16>> {
+        Mock::new(expectations)
     }
 
     fn assert_read_ok<const LENGTH: usize>(
@@ -223,14 +221,17 @@ mod tests {
         value: u16,
         expected: Option<u32>,
     ) {
+        let mut interpolator = interpolator(table);
         let expectations = [Transaction::read(0, value)];
-        assert_eq!(interpolator(table, &expectations).read(), Ok(expected))
+        let mut adc = adc(&expectations);
+
+        assert_eq!(interpolator.read(&mut adc), Ok(expected))
     }
 
     #[test]
     #[should_panic]
     fn panics_if_unsorted_tabled() {
-        interpolator(table_invalid(), &[]);
+        interpolator(table_invalid());
     }
 
     #[test]
@@ -257,22 +258,20 @@ mod tests {
 
     #[test]
     fn error() {
-        let expectations =
-            [Transaction::read(0, 0).with_error(MockError::Io(ErrorKind::InvalidData))];
-        assert!(interpolator(table_positive(), &expectations)
-            .read()
-            .is_err());
+        let mut adc =
+            adc(&[Transaction::read(0, 0).with_error(MockError::Io(ErrorKind::InvalidData))]);
+        assert!(interpolator(table_positive()).read(&mut adc).is_err());
     }
 
     #[test]
     fn min_value() {
-        assert_eq!(interpolator(table_positive(), &[]).min_value(), 10);
-        assert_eq!(interpolator(table_negative(), &[]).min_value(), 10);
+        assert_eq!(interpolator(table_positive()).min_value(), 10);
+        assert_eq!(interpolator(table_negative()).min_value(), 10);
     }
 
     #[test]
     fn max_value() {
-        assert_eq!(interpolator(table_positive(), &[]).max_value(), 40);
-        assert_eq!(interpolator(table_negative(), &[]).max_value(), 40);
+        assert_eq!(interpolator(table_positive()).max_value(), 40);
+        assert_eq!(interpolator(table_negative()).max_value(), 40);
     }
 }
