@@ -68,6 +68,11 @@ impl<Adc, Pin, const LENGTH: usize> AdcInterpolator<Adc, Pin, LENGTH> {
         Pin: Channel<ADC>,
         Adc: OneShot<ADC, Word, Pin>,
     {
+        debug_assert!(
+            table.windows(2).all(|w| w[0].0 <= w[1].0),
+            "The values in `table` must be in ascending order by voltage"
+        );
+
         Self { adc, pin, table }
     }
 
@@ -144,6 +149,12 @@ mod tests {
         pair(1000, 12, 300, 10),
     ];
 
+    const TABLE_INVALID: [(u32, u32); 3] = [
+        pair(1000, 12, 300, 40),
+        pair(1000, 12, 200, 30),
+        pair(1000, 12, 100, 10),
+    ];
+
     pub fn interpolator<const LENGTH: usize>(
         table: [(u32, u32); LENGTH],
         expectations: &[Transaction<u32>],
@@ -161,6 +172,12 @@ mod tests {
     ) {
         let expectations = [Transaction::read(0, value)];
         assert_eq!(interpolator(table, &expectations).read(), Ok(expected))
+    }
+
+    #[test]
+    #[should_panic]
+    fn panics_if_unsorted_tabled() {
+        interpolator(TABLE_INVALID, &[]);
     }
 
     #[test]
