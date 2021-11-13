@@ -2,6 +2,7 @@
 
 mod interpolate;
 
+use embedded_hal::adc::{Channel, OneShot};
 use interpolate::interpolate;
 
 /// Converts a voltage and corresponding value into a pair of `(adc_value, value)`.
@@ -35,11 +36,13 @@ pub const fn pair(max_voltage: u32, precision: u32, voltage: u32, value: u32) ->
 }
 
 #[derive(Debug)]
-pub struct AdcInterpolator<const LENGTH: usize> {
+pub struct AdcInterpolator<Adc, Pin, const LENGTH: usize> {
+    adc: Adc,
+    pin: Pin,
     table: [(u32, u32); LENGTH],
 }
 
-impl<const LENGTH: usize> AdcInterpolator<LENGTH> {
+impl<Adc, Pin, const LENGTH: usize> AdcInterpolator<Adc, Pin, LENGTH> {
     /// Returns an interpolator using the provided table.
     ///
     /// The values in the table *must* be in ascending order by
@@ -59,29 +62,41 @@ impl<const LENGTH: usize> AdcInterpolator<LENGTH> {
     ///   pair(1000, 12, 200, 30),
     ///   pair(1000, 12, 300, 10),
     /// ]);
-    pub const fn new(table: [(u32, u32); LENGTH]) -> Self {
-        Self { table }
+    pub fn new<ADC, Word>(adc: Adc, pin: Pin, table: [(u32, u32); LENGTH]) -> Self
+    where
+        Word: Into<u32>,
+        Pin: Channel<ADC>,
+        Adc: OneShot<ADC, Word, Pin>,
+    {
+        Self { adc, pin, table }
+    }
+
+    pub fn free(self) -> (Adc, Pin) {
+        (self.adc, self.pin)
     }
 
     /// Returns a value based on the table, using linear interpolation
     /// between values in the table if necessary. If `adc_value` falls
     /// outside the range of the table, returns `None`.
-    pub fn value(&self, adc_value: u32) -> Option<u32> {
-        let (x0, y0, x1, y1) = self
-            .table
-            .iter()
-            .enumerate()
-            .find_map(|(index, (x0, y0))| {
-                let (x1, y1) = self.table.get(index + 1)?;
+    pub fn read<ADC, Word>(&mut self) -> Option<u32>
+    where
+        Word: Into<u32>,
+        Pin: Channel<ADC>,
+        Adc: OneShot<ADC, Word, Pin>,
+    {
+        let adc_value: u32 = self.adc.read(&mut self.pin).ok().unwrap().into();
 
-                if adc_value >= *x0 && adc_value <= *x1 {
-                    Some((x0, y0, x1, y1))
-                } else {
-                    None
-                }
-            })?;
+        let result = self.table.iter().enumerate().find_map(|(index, (x0, y0))| {
+            let (x1, y1) = self.table.get(index + 1)?;
 
-        Some(interpolate(*x0, *x1, *y0, *y1, adc_value))
+            if adc_value >= *x0 && adc_value <= *x1 {
+                Some((x0, y0, x1, y1))
+            } else {
+                None
+            }
+        });
+
+        result.map(|(x0, y0, x1, y1)| interpolate(*x0, *x1, *y0, *y1, adc_value))
     }
 
     /// Returns the smallest value that can be returned by
@@ -108,50 +123,83 @@ impl<const LENGTH: usize> AdcInterpolator<LENGTH> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use embedded_hal_mock::{
+        adc::{Mock, MockChan0, Transaction},
+        common::Generic,
+    };
 
-    const TABLE_POSITIVE: AdcInterpolator<3> = AdcInterpolator::new([
+    const TABLE_POSITIVE: [(u32, u32); 3] = [
         pair(1000, 12, 100, 10),
         pair(1000, 12, 200, 30),
         pair(1000, 12, 300, 40),
-    ]);
+    ];
 
-    const TABLE_NEGATIVE: AdcInterpolator<3> = AdcInterpolator::new([
+    const TABLE_NEGATIVE: [(u32, u32); 3] = [
         pair(1000, 12, 100, 40),
         pair(1000, 12, 200, 30),
         pair(1000, 12, 300, 10),
-    ]);
+    ];
+
+    fn successful_interpolator<const LENGTH: usize>(
+        table: [(u32, u32); LENGTH],
+        value: u32,
+    ) -> AdcInterpolator<Generic<Transaction<u32>>, MockChan0, LENGTH> {
+        let expectations = [Transaction::read(0, value)];
+        let adc = Mock::new(&expectations);
+        let pin = MockChan0 {};
+
+        AdcInterpolator::new(adc, pin, table)
+    }
 
     #[test]
     fn matching_exact_values() {
-        assert_eq!(TABLE_NEGATIVE.value(409), Some(40));
-        assert_eq!(TABLE_NEGATIVE.value(819), Some(30));
-        assert_eq!(TABLE_NEGATIVE.value(1228), Some(10));
+        assert_eq!(
+            successful_interpolator(TABLE_NEGATIVE, 409).read(),
+            Some(40)
+        );
+        assert_eq!(
+            successful_interpolator(TABLE_NEGATIVE, 819).read(),
+            Some(30)
+        );
+        assert_eq!(
+            successful_interpolator(TABLE_NEGATIVE, 1228).read(),
+            Some(10)
+        );
     }
 
     #[test]
     fn interpolates() {
-        assert_eq!(TABLE_NEGATIVE.value(502), Some(38));
-        assert_eq!(TABLE_NEGATIVE.value(614), Some(35));
-        assert_eq!(TABLE_NEGATIVE.value(1023), Some(21));
+        assert_eq!(
+            successful_interpolator(TABLE_NEGATIVE, 502).read(),
+            Some(38)
+        );
+        assert_eq!(
+            successful_interpolator(TABLE_NEGATIVE, 614).read(),
+            Some(35)
+        );
+        assert_eq!(
+            successful_interpolator(TABLE_NEGATIVE, 1023).read(),
+            Some(21)
+        );
     }
 
     #[test]
     fn outside_range() {
-        assert_eq!(TABLE_NEGATIVE.value(0), None);
-        assert_eq!(TABLE_NEGATIVE.value(408), None);
-        assert_eq!(TABLE_NEGATIVE.value(1229), None);
-        assert_eq!(TABLE_NEGATIVE.value(10000), None);
+        assert_eq!(successful_interpolator(TABLE_NEGATIVE, 0).read(), None);
+        assert_eq!(successful_interpolator(TABLE_NEGATIVE, 408).read(), None);
+        assert_eq!(successful_interpolator(TABLE_NEGATIVE, 1229).read(), None);
+        assert_eq!(successful_interpolator(TABLE_NEGATIVE, 10000).read(), None);
     }
 
     #[test]
     fn min_value() {
-        assert_eq!(TABLE_POSITIVE.min_value(), 10);
-        assert_eq!(TABLE_NEGATIVE.min_value(), 10);
+        assert_eq!(successful_interpolator(TABLE_POSITIVE, 0).min_value(), 10);
+        assert_eq!(successful_interpolator(TABLE_NEGATIVE, 0).min_value(), 10);
     }
 
     #[test]
     fn max_value() {
-        assert_eq!(TABLE_POSITIVE.max_value(), 40);
-        assert_eq!(TABLE_NEGATIVE.max_value(), 40);
+        assert_eq!(successful_interpolator(TABLE_POSITIVE, 0).max_value(), 40);
+        assert_eq!(successful_interpolator(TABLE_NEGATIVE, 0).max_value(), 40);
     }
 }

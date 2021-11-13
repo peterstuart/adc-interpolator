@@ -1,3 +1,10 @@
 [package]
 name = "adc-interpolator"
 version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+embedded-hal = { version = "0.2.6", features = ["unproven"] }
+
+[dev-dependencies]
+embedded-hal-mock = "0.8.0"
