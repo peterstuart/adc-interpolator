@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "embedded-hal",
  "embedded-hal-mock",
+ "nb 1.0.0",
 ]
 
 [[package]]

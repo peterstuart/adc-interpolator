@@ -78,13 +78,15 @@ impl<Adc, Pin, const LENGTH: usize> AdcInterpolator<Adc, Pin, LENGTH> {
     /// Returns a value based on the table, using linear interpolation
     /// between values in the table if necessary. If `adc_value` falls
     /// outside the range of the table, returns `None`.
-    pub fn read<ADC, Word>(&mut self) -> Option<u32>
+    pub fn read<ADC, Word>(
+        &mut self,
+    ) -> Result<Option<u32>, nb::Error<<Adc as OneShot<ADC, Word, Pin>>::Error>>
     where
         Word: Into<u32>,
         Pin: Channel<ADC>,
         Adc: OneShot<ADC, Word, Pin>,
     {
-        let adc_value: u32 = self.adc.read(&mut self.pin).ok().unwrap().into();
+        let adc_value: u32 = self.adc.read(&mut self.pin)?.into();
 
         let result = self.table.iter().enumerate().find_map(|(index, (x0, y0))| {
             let (x1, y1) = self.table.get(index + 1)?;
@@ -96,17 +98,17 @@ impl<Adc, Pin, const LENGTH: usize> AdcInterpolator<Adc, Pin, LENGTH> {
             }
         });
 
-        result.map(|(x0, y0, x1, y1)| interpolate(*x0, *x1, *y0, *y1, adc_value))
+        Ok(result.map(|(x0, y0, x1, y1)| interpolate(*x0, *x1, *y0, *y1, adc_value)))
     }
 
     /// Returns the smallest value that can be returned by
-    /// [`value`](AdcInterpolator::value).
+    /// [`read`](AdcInterpolator::read).
     pub fn min_value(&self) -> u32 {
         self.first_value().min(self.last_value())
     }
 
     /// Returns the largest value that can be returned by
-    /// [`value`](AdcInterpolator::value).
+    /// [`read`](AdcInterpolator::read).
     pub fn max_value(&self) -> u32 {
         self.first_value().max(self.last_value())
     }
@@ -126,7 +128,9 @@ mod tests {
     use embedded_hal_mock::{
         adc::{Mock, MockChan0, Transaction},
         common::Generic,
+        MockError,
     };
+    use std::io::ErrorKind;
 
     const TABLE_POSITIVE: [(u32, u32); 3] = [
         pair(1000, 12, 100, 10),
@@ -140,66 +144,63 @@ mod tests {
         pair(1000, 12, 300, 10),
     ];
 
-    fn successful_interpolator<const LENGTH: usize>(
+    pub fn interpolator<const LENGTH: usize>(
         table: [(u32, u32); LENGTH],
-        value: u32,
+        expectations: &[Transaction<u32>],
     ) -> AdcInterpolator<Generic<Transaction<u32>>, MockChan0, LENGTH> {
-        let expectations = [Transaction::read(0, value)];
-        let adc = Mock::new(&expectations);
+        let adc = Mock::new(expectations);
         let pin = MockChan0 {};
 
         AdcInterpolator::new(adc, pin, table)
     }
 
+    fn assert_read_ok<const LENGTH: usize>(
+        table: [(u32, u32); LENGTH],
+        value: u32,
+        expected: Option<u32>,
+    ) {
+        let expectations = [Transaction::read(0, value)];
+        assert_eq!(interpolator(table, &expectations).read(), Ok(expected))
+    }
+
     #[test]
     fn matching_exact_values() {
-        assert_eq!(
-            successful_interpolator(TABLE_NEGATIVE, 409).read(),
-            Some(40)
-        );
-        assert_eq!(
-            successful_interpolator(TABLE_NEGATIVE, 819).read(),
-            Some(30)
-        );
-        assert_eq!(
-            successful_interpolator(TABLE_NEGATIVE, 1228).read(),
-            Some(10)
-        );
+        assert_read_ok(TABLE_NEGATIVE, 409, Some(40));
+        assert_read_ok(TABLE_NEGATIVE, 819, Some(30));
+        assert_read_ok(TABLE_NEGATIVE, 1228, Some(10));
     }
 
     #[test]
     fn interpolates() {
-        assert_eq!(
-            successful_interpolator(TABLE_NEGATIVE, 502).read(),
-            Some(38)
-        );
-        assert_eq!(
-            successful_interpolator(TABLE_NEGATIVE, 614).read(),
-            Some(35)
-        );
-        assert_eq!(
-            successful_interpolator(TABLE_NEGATIVE, 1023).read(),
-            Some(21)
-        );
+        assert_read_ok(TABLE_NEGATIVE, 502, Some(38));
+        assert_read_ok(TABLE_NEGATIVE, 614, Some(35));
+        assert_read_ok(TABLE_NEGATIVE, 1023, Some(21));
     }
 
     #[test]
     fn outside_range() {
-        assert_eq!(successful_interpolator(TABLE_NEGATIVE, 0).read(), None);
-        assert_eq!(successful_interpolator(TABLE_NEGATIVE, 408).read(), None);
-        assert_eq!(successful_interpolator(TABLE_NEGATIVE, 1229).read(), None);
-        assert_eq!(successful_interpolator(TABLE_NEGATIVE, 10000).read(), None);
+        assert_read_ok(TABLE_NEGATIVE, 0, None);
+        assert_read_ok(TABLE_NEGATIVE, 408, None);
+        assert_read_ok(TABLE_NEGATIVE, 1229, None);
+        assert_read_ok(TABLE_NEGATIVE, 10000, None);
+    }
+
+    #[test]
+    fn error() {
+        let expectations =
+            [Transaction::read(0, 0).with_error(MockError::Io(ErrorKind::InvalidData))];
+        assert!(interpolator(TABLE_POSITIVE, &expectations).read().is_err());
     }
 
     #[test]
     fn min_value() {
-        assert_eq!(successful_interpolator(TABLE_POSITIVE, 0).min_value(), 10);
-        assert_eq!(successful_interpolator(TABLE_NEGATIVE, 0).min_value(), 10);
+        assert_eq!(interpolator(TABLE_POSITIVE, &[]).min_value(), 10);
+        assert_eq!(interpolator(TABLE_NEGATIVE, &[]).min_value(), 10);
     }
 
     #[test]
     fn max_value() {
-        assert_eq!(successful_interpolator(TABLE_POSITIVE, 0).max_value(), 40);
-        assert_eq!(successful_interpolator(TABLE_NEGATIVE, 0).max_value(), 40);
+        assert_eq!(interpolator(TABLE_POSITIVE, &[]).max_value(), 40);
+        assert_eq!(interpolator(TABLE_NEGATIVE, &[]).max_value(), 40);
     }
 }
