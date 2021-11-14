@@ -1,6 +1,13 @@
 [package]
 name = "adc-interpolator"
 version = "0.1.0"
+authors = ["Peter Stuart <peter@peterstuart.org>"]
+description = "An interpolator for analog-to-digital converters"
+readme = "README.md"
+repository = "https://github.com/peterstuart/adc-interpolator/"
+keywords = ["embedded-hal", "adc", "interpolation"]
+categories = ["embedded"]
+license = "MIT"
 edition = "2021"
 
 [dependencies]
