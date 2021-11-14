@@ -9,7 +9,6 @@ linear interpolation.
 
 ```rust
 use adc_interpolator::{AdcInterpolator, pair};
-#
 
 let mut interpolator = AdcInterpolator::new(
     pin,

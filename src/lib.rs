@@ -12,7 +12,6 @@
 //! #     common::Generic,
 //! #     MockError,
 //! # };
-//! #
 //! # let pin = MockChan0 {};
 //! # let expectations: [Transaction<u16>; 1] = [Transaction::read(0, 614)];
 //! # let mut adc = Mock::new(&expectations);
