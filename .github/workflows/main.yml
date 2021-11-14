@@ -23,3 +23,9 @@ jobs:
         
       - name: test
         run: cargo test
+
+      - name: Check if README is up to date
+        run: |
+          cargo install cargo-readme
+          cargo readme > README.md
+          git diff --exit-code
