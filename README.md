@@ -8,17 +8,19 @@ linear interpolation.
 ## Examples
 
 ```rust
-use adc_interpolator::{AdcInterpolator, pair};
+use adc_interpolator::{AdcInterpolator, Config};
 
-let mut interpolator = AdcInterpolator::new(
-    pin,
-    [
-        // 1000 mV maximum voltage, 12-bit precision
-        pair(1000, 12, 100, 40), // 100 mV -> 40
-        pair(1000, 12, 200, 30), // 200 mV -> 30
-        pair(1000, 12, 300, 10), // 300 mV -> 10
+let config = Config {
+    max_voltage: 1000, // 1000 mV maximum voltage
+    precision: 12,     // 12-bit precision
+    voltage_to_values: [
+        (100, 40), // 100 mV -> 40
+        (200, 30), // 200 mV -> 30
+        (300, 10), // 300 mV -> 10
     ],
-);
+};
+
+let mut interpolator = AdcInterpolator::new(pin, config);
 
 // With voltage at 150 mV, the value is 35
 assert_eq!(interpolator.read(&mut adc), Ok(Some(35)));
