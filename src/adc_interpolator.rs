@@ -2,38 +2,50 @@ use crate::interpolate::interpolate;
 use core::fmt;
 use embedded_hal::adc::{Channel, OneShot};
 
-/// Converts a voltage and corresponding value into a pair of `(adc_value, value)`.
-///
-/// Use to create a table to be used by an [AdcInterpolator](AdcInterpolator).
-///
-/// # Arguments
+/// Configuration for an `AdcInterpolator`.
 ///
 /// - `max_voltage`: The voltage corresponding to the largest value possible for the ADC (mV)
 /// - `precision`: The precision of the ADC in bits (eg. for 10-bit precision, use `10`)
-/// - `voltage`: The voltage to convert (mV)
-/// - `value`: The value to use in the pair
+/// - `voltage_to_values`: An array of tuples of `(voltage in mV, value)` which will be used for the interpolation
 ///
 /// # Examples
 ///
 /// ```
-/// use adc_interpolator::pair;
+/// use adc_interpolator::Config;
 ///
-/// pair::<u16>(
-///     3300, // 3.3 V max voltage
-///     10,   // 10 bits of precision
-///     420,  // 0.42 V
-///     80,   // value
-/// );
+/// let config = Config {
+///     max_voltage: 3300, // 3.3 V
+///     precision: 10,     // 10 bits of precision
+///     voltage_to_values: [
+///         (100, 5),   // 100 mV  -> 5
+///         (500, 10),  // 500 mV  -> 10
+///         (2000, 15), // 2000 mV -> 15
+///     ],
+/// };
 /// ```
-pub fn pair<Word>(max_voltage: u32, precision: u32, voltage: u32, value: u32) -> (Word, u32)
-where
-    Word: TryFrom<u32>,
-    <Word as TryFrom<u32>>::Error: fmt::Debug,
-{
-    let max_adc_value = 2u32.pow(precision);
-    let adc_value = voltage * max_adc_value / max_voltage;
+pub struct Config<const LENGTH: usize> {
+    pub max_voltage: u32,
+    pub precision: u32,
+    pub voltage_to_values: [(u32, u32); LENGTH],
+}
 
-    (adc_value.try_into().unwrap(), value)
+impl<const LENGTH: usize> Config<LENGTH> {
+    fn table<Word>(&self) -> [(Word, u32); LENGTH]
+    where
+        Word: Copy + PartialOrd + TryFrom<u32>,
+        <Word as TryFrom<u32>>::Error: fmt::Debug,
+    {
+        let mut table: [(Word, u32); LENGTH] = [(0.try_into().unwrap(), 0); LENGTH];
+
+        for (index, (voltage, value)) in self.voltage_to_values.into_iter().enumerate() {
+            let max_adc_value = 2u32.pow(self.precision);
+            let adc_value = voltage * max_adc_value / self.max_voltage;
+
+            table[index] = (adc_value.try_into().unwrap(), value);
+        }
+
+        table
+    }
 }
 
 #[derive(Debug)]
@@ -45,19 +57,16 @@ pub struct AdcInterpolator<Pin, Word, const LENGTH: usize> {
 type Error<Adc, ADC, Word, Pin> = nb::Error<<Adc as OneShot<ADC, Word, Pin>>::Error>;
 
 impl<Pin, Word, const LENGTH: usize> AdcInterpolator<Pin, Word, LENGTH> {
-    /// Returns an interpolator using the provided table.
+    /// Returns an interpolator using the provided `config`.
     ///
-    /// The values in the table must be in ascending order by voltage
-    /// or this function will panic. (ie. If you are using
-    /// [`pair`](pair) to create the pairs in the table, the `voltage`
-    /// parameter must increase with each pair.)
+    /// The values in `config`'s `voltage_to_values` field must be in
+    /// ascending order by voltage or this function will panic when
+    /// running in debug mode.
     ///
     /// # Examples
     ///
-    /// Use [`pair`](pair) to create the pairs in `table`:
-    ///
     /// ```
-    /// use adc_interpolator::{AdcInterpolator, pair};
+    /// use adc_interpolator::{AdcInterpolator, Config};
     /// # use embedded_hal_mock::{
     /// #     adc::{Mock, MockChan0, Transaction},
     /// #     common::Generic,
@@ -66,25 +75,36 @@ impl<Pin, Word, const LENGTH: usize> AdcInterpolator<Pin, Word, LENGTH> {
     /// #
     /// # let pin = MockChan0 {};
     ///
-    /// let interpolator = AdcInterpolator::new(
-    ///     pin,
-    ///     [
-    ///         pair::<u16>(1000, 12, 100, 40),
-    ///         pair(1000, 12, 200, 30),
-    ///         pair(1000, 12, 300, 10),
+    /// let config = Config {
+    ///     max_voltage: 1000,
+    ///     precision: 12,
+    ///     voltage_to_values: [
+    ///         (100, 40),
+    ///         (200, 30),
+    ///         (300, 10),
     ///     ],
-    /// );
-    pub fn new<ADC>(pin: Pin, table: [(Word, u32); LENGTH]) -> Self
+    /// };
+    ///
+    /// let interpolator = AdcInterpolator::new(pin, config);
+    /// # let interpolator_u16: AdcInterpolator<MockChan0, u16, 3> = interpolator;
+    pub fn new<ADC>(pin: Pin, config: Config<LENGTH>) -> Self
     where
-        Word: PartialOrd,
+        Word: Copy + PartialOrd + TryFrom<u32>,
+        <Word as TryFrom<u32>>::Error: fmt::Debug,
         Pin: Channel<ADC>,
     {
         debug_assert!(
-            table.windows(2).all(|w| w[0].0 <= w[1].0),
+            config
+                .voltage_to_values
+                .windows(2)
+                .all(|w| w[0].0 <= w[1].0),
             "The values in table must be in ascending order by voltage"
         );
 
-        Self { pin, table }
+        Self {
+            pin,
+            table: config.table(),
+        }
     }
 
     /// Destroys the interpolator and returns the `Pin`.
@@ -99,7 +119,7 @@ impl<Pin, Word, const LENGTH: usize> AdcInterpolator<Pin, Word, LENGTH> {
     /// # Examples
     ///
     /// ```
-    /// use adc_interpolator::{AdcInterpolator, pair};
+    /// use adc_interpolator::{AdcInterpolator, Config};
     /// # use embedded_hal_mock::{
     /// #     adc::{Mock, MockChan0, Transaction},
     /// #     common::Generic,
@@ -110,14 +130,17 @@ impl<Pin, Word, const LENGTH: usize> AdcInterpolator<Pin, Word, LENGTH> {
     /// # let mut adc = Mock::new(&expectations);
     /// # let pin = MockChan0 {};
     ///
-    /// let mut interpolator = AdcInterpolator::new(
-    ///     pin,
-    ///     [
-    ///         pair(1000, 12, 100, 40),
-    ///         pair(1000, 12, 200, 30),
-    ///         pair(1000, 12, 300, 10),
+    /// let config = Config {
+    ///     max_voltage: 1000,
+    ///     precision: 12,
+    ///     voltage_to_values: [
+    ///         (100, 40),
+    ///         (200, 30),
+    ///         (300, 10),
     ///     ],
-    /// );
+    /// };
+    ///
+    /// let mut interpolator = AdcInterpolator::new(pin, config);
     ///
     /// // With voltage at 150 mV, the value is 35
     /// assert_eq!(interpolator.read(&mut adc), Ok(Some(35)));
@@ -179,35 +202,35 @@ mod tests {
     };
     use std::io::ErrorKind;
 
-    fn table_positive() -> [(u16, u32); 3] {
-        [
-            pair(1000, 12, 100, 10),
-            pair(1000, 12, 200, 30),
-            pair(1000, 12, 300, 40),
-        ]
+    fn table_positive() -> Config<3> {
+        Config {
+            max_voltage: 1000,
+            precision: 12,
+            voltage_to_values: [(100, 10), (200, 30), (300, 40)],
+        }
     }
 
-    fn table_negative() -> [(u16, u32); 3] {
-        [
-            pair(1000, 12, 100, 40),
-            pair(1000, 12, 200, 30),
-            pair(1000, 12, 300, 10),
-        ]
+    fn table_negative() -> Config<3> {
+        Config {
+            max_voltage: 1000,
+            precision: 12,
+            voltage_to_values: [(100, 40), (200, 30), (300, 10)],
+        }
     }
 
-    fn table_invalid() -> [(u16, u32); 3] {
-        [
-            pair(1000, 12, 300, 40),
-            pair(1000, 12, 200, 30),
-            pair(1000, 12, 100, 10),
-        ]
+    fn table_invalid() -> Config<3> {
+        Config {
+            max_voltage: 1000,
+            precision: 12,
+            voltage_to_values: [(300, 40), (200, 30), (100, 10)],
+        }
     }
 
     fn interpolator<const LENGTH: usize>(
-        table: [(u16, u32); LENGTH],
+        config: Config<LENGTH>,
     ) -> AdcInterpolator<MockChan0, u16, LENGTH> {
         let pin = MockChan0 {};
-        AdcInterpolator::new(pin, table)
+        AdcInterpolator::new(pin, config)
     }
 
     fn adc(expectations: &[Transaction<u16>]) -> Generic<Transaction<u16>> {
@@ -215,11 +238,11 @@ mod tests {
     }
 
     fn assert_read_ok<const LENGTH: usize>(
-        table: [(u16, u32); LENGTH],
+        config: Config<LENGTH>,
         value: u16,
         expected: Option<u32>,
     ) {
-        let mut interpolator = interpolator(table);
+        let mut interpolator = interpolator(config);
         let expectations = [Transaction::read(0, value)];
         let mut adc = adc(&expectations);
 
