@@ -1,6 +1,6 @@
 [package]
 name = "adc-interpolator"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Peter Stuart <peter@peterstuart.org>"]
 description = "An interpolator for analog-to-digital converters"
 readme = "README.md"
