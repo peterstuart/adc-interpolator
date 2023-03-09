@@ -12,7 +12,7 @@ edition = "2021"
 
 [dependencies]
 embedded-hal = { version = "0.2.7", features = ["unproven"] }
-nb = "1.0.0"
+nb = "1.1.0"
 
 [dev-dependencies]
 embedded-hal-mock = "0.8.0"
